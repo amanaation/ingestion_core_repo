@@ -10,7 +10,7 @@ logging.basicConfig(format='%(asctime)s,%(msecs)03d %(levelname)-8s [%(filename)
 logger = logging.getLogger(__name__)
 
 from datatypes import SourceDestinationTypeMapping
-from connectors.connectors import Connectors
+from ingestion_core_repo.connectors import Connectors
 from dotenv import load_dotenv
 from google.cloud import bigquery as bq
 from google.api_core.exceptions import Conflict

@@ -14,7 +14,7 @@ logging.basicConfig(format='%(asctime)s,%(msecs)03d %(levelname)-8s [%(filename)
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-from connectors.connectors import Connectors
+from ingestion_core_repo.connectors import Connectors
 from google.cloud import storage
 from google.cloud.storage.bucket import Bucket
 from io import StringIO

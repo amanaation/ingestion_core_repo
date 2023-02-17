@@ -7,7 +7,7 @@ warnings.filterwarnings("ignore")
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
-from connectors.connectors import Connectors
+from ingestion_core_repo.connectors import Connectors
 
 logging.basicConfig(format='%(asctime)s,%(msecs)03d %(levelname)-8s [%(filename)s:%(lineno)d] %(message)s',
     datefmt='%Y-%m-%d:%H:%M:%S',
