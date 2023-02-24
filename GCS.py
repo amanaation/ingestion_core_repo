@@ -142,10 +142,8 @@ class GCS(Connectors):
         # generation-match precondition using its generation number.
         # There is also an `if_source_generation_match` parameter, which is not used in this example.
         """
-        destination_generation_match_precondition = 0
         blob_copy = source_bucket.copy_blob(
             source_blob, destination_bucket, destination_blob_name,
-            if_generation_match=destination_generation_match_precondition,
         )
         source_bucket.delete_blob(blob_name)
 
@@ -158,23 +156,31 @@ class GCS(Connectors):
             )
         )
 
+    def get_error_folder_path(self, old_path):
+        # dev/sellsthru/queue/koch/inventory/14-Feb-2023/inventory_apac.csv
+        new_path = old_path.replace("queue", "error")
+        return new_path
+
     def handle_extract_error(self, args):
-        self.move_blob(self.bucket_name, args["file_name"], os.getenv("GCS_ERROR_BUCKET_NAME"), args["file_name"])
+        error_folder_path = self.get_error_folder_path(args["file_name"])
+        self.move_blob(self.bucket_name, args["file_name"], self.bucket_name, error_folder_path)
 
     def update_last_successful_extract(self, max_timestamp):
         new_timestamp = ciso8601.parse_datetime(max_timestamp)
 
         if "max_timestamp" not in self.last_successful_extract:
             self.last_successful_extract["max_timestamp"] = str(max_timestamp)
-
         else:
             last_max_timestamp = ciso8601.parse_datetime(self.last_successful_extract["max_timestamp"])
             self.last_successful_extract["max_timestamp"] = str(max(new_timestamp, last_max_timestamp))
 
-    def extract(self, last_successful_extract, **kwargs):
+    def get_processed_folder_path(self, old_path):
+        # dev/sellsthru/queue/koch/inventory/14-Feb-2023/inventory_apac.csv
+        new_path = old_path.replace("queue", "processed")
+        return new_path
 
+    def extract(self, last_successful_extract, **kwargs):
         return_args = {"extraction_status": False, "file_name": ""}
-        last_max_timestamp = ""
 
         if last_successful_extract:
             self.last_successful_extract = last_successful_extract
@@ -182,24 +188,25 @@ class GCS(Connectors):
         blobs = self.bucket.list_blobs(prefix=self.file_path)
         for blob in blobs:
 
-            # try:
-            if not blob.name.endswith("/"):
-                print("file : ", blob.name)
+            try:
+                if not blob.name.endswith("/"):
+                    print("file : ", blob.name)
 
-                return_args["file_name"] = blob.name
-                file_path = f"gs://{self.bucket_name}/{blob.name}"
-                file_data = self.read_file(file_path)
-                file_data = self.rectify_column_names(file_data)
+                    return_args["file_name"] = blob.name
+                    file_path = f"gs://{self.bucket_name}/{blob.name}"
+                    file_data = self.read_file(file_path)
+                    file_data = self.rectify_column_names(file_data)
 
-                return_args["extraction_status"] = True
-                self.move_blob()
-                # self.update_last_successful_extract(str(blob.updated))
-                yield file_data.head(), return_args
+                    return_args["extraction_status"] = True
+                    processed_folder_path = self.get_processed_folder_path(blob.name)
+                    logger.info(f"Moving file {blob.name.split('/')[-1]} to processed folder")
+                    self.move_blob(self.bucket_name, blob.name, self.bucket_name, processed_folder_path)
+                    yield file_data, return_args
 
-            # except Exception as e:
-            #     logger.info(f"Error occurred while reading file {blob.name}")
-            #     logger.info(f"Moving file to error bucket ")
-            #     yield pd.DataFrame({"": [], "": []}), return_args
+            except Exception as e:
+                logger.info(f"Error occurred while reading file {blob.name}")
+                logger.info(f"Moving file to error bucket ")
+                yield pd.DataFrame({"": [], "": []}), return_args
 
     def save(self, df: pd.DataFrame) -> None:
         pass

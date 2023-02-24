@@ -113,8 +113,23 @@ class BigQuery(Connectors):
     def get_schema(self, **kwargs) -> None:
         pass
 
-    def extract(self, **kwargs) -> None:
-        pass
+    def execute(self, sql: str, project_id: str) -> pd.DataFrame:
+        """
+        This function is to return dataframe out of query result
+        Parameters
+        ----------
+            sql: str
+                 query string to return result
+            project_id: str
+                GCP project ID
+        returns:
+            df: pd.DataFrame
+                 dataframe with source data
+        """
+        return pd.read_gbq(sql, project_id=project_id)
+
+    def extract(self, sql, project_id) -> None:
+        return self.execute(sql, project_id)
 
     def save(self, df: pd.DataFrame) -> None:
         """

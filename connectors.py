@@ -15,5 +15,5 @@ class Connectors:
     def save(self):
         pass
 
-    def update_last_successfull_extract(self):
+    def update_last_successful_extract(self):
         pass

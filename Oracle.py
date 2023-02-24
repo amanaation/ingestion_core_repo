@@ -3,17 +3,18 @@ import oracledb
 import pandas as pd
 import os
 import warnings
-warnings.filterwarnings("ignore")
+import logging
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from ingestion_core_repo.connectors import Connectors
 
 logging.basicConfig(format='%(asctime)s,%(msecs)03d %(levelname)-8s [%(filename)s:%(lineno)d] %(message)s',
-    datefmt='%Y-%m-%d:%H:%M:%S',
-    level=logging.INFO)
+                    datefmt='%Y-%m-%d:%H:%M:%S',
+                    level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+warnings.filterwarnings("ignore")
 load_dotenv()
 
 class OracleDatabaseConnection(Connectors):
@@ -34,7 +35,7 @@ class OracleDatabaseConnection(Connectors):
             dsn=f"{connection_details['host']}:{connection_details['port']}/{connection_details['DB']}")
 
         self.cursor = self.connection.cursor()
-        self.last_successfull_extract = {}
+        self.last_successful_extract = {}
         logger.info("Connection created successfully with source")
 
     def get_connection_details(self):
@@ -66,7 +67,7 @@ class OracleDatabaseConnection(Connectors):
         schema_details = pd.read_sql(schema_details_query, self.connection)
         return schema_details
 
-    def get_incremental_clause(self, incremental_columns: dict, last_successfull_extract: dict) -> str:
+    def get_incremental_clause(self, incremental_columns: dict, last_successful_extract: dict) -> str:
 
         """
         Creates the inmcremental clause to be added to where clause to fetch latest data
@@ -76,7 +77,7 @@ class OracleDatabaseConnection(Connectors):
             incremental_columns : dict
                 Required Keys:
                     - column_name : [column_details]
-            last_successfull_extract: dict
+            last_successful_extract: dict
                 Example value : 
                     - {
                         last_fetch_incremental_column1: last_fetch_incremental_value1,
@@ -92,16 +93,16 @@ class OracleDatabaseConnection(Connectors):
 
             incremental_column_name = incremental_column_name.lower()
             incremental_column = incremental_columns[incremental_column_name]
-            if incremental_column_name in last_successfull_extract:
+            if incremental_column_name in last_successful_extract:
                 logger.info("Adding incremental clause to query")
 
                 if incremental_column["column_type"] == "timestamp":
                     incremental_clause += f"""  {incremental_column_name} > 
-                                        TO_DATE('{last_successfull_extract[incremental_column_name]}', 
+                                        TO_DATE('{last_successful_extract[incremental_column_name]}', 
                                         '{incremental_column["column_format"]}') """
 
                 elif incremental_column["column_type"] == "id":
-                    incremental_clause += f""" {incremental_column_name} > {last_successfull_extract[incremental_column_name]}"""
+                    incremental_clause += f""" {incremental_column_name} > {last_successful_extract[incremental_column_name]}"""
 
                 incremental_clause += " and"
 
@@ -214,22 +215,22 @@ class OracleDatabaseConnection(Connectors):
     def handle_extract_error(self):
         pass
 
-    def update_last_successfull_extract(self, incremental_columns, result_df) -> None:
+    def update_last_successful_extract(self, incremental_columns, result_df) -> None:
         print("Updating values")
         for incremental_column in incremental_columns:
             incremental_column_last_batch_fetched_value = result_df[incremental_column.upper()].max()
-            if incremental_column in self.last_successfull_extract:
-                self.last_successfull_extract[incremental_column] = max(self.last_successfull_extract[incremental_column], incremental_column_last_batch_fetched_value)
+            if incremental_column in self.last_successful_extract:
+                self.last_successful_extract[incremental_column] = max(self.last_successful_extract[incremental_column], incremental_column_last_batch_fetched_value)
             else:
-                self.last_successfull_extract[incremental_column] = incremental_column_last_batch_fetched_value
-        logger.info(f"Updated last successful extract : {self.last_successfull_extract}")
+                self.last_successful_extract[incremental_column] = incremental_column_last_batch_fetched_value
+        logger.info(f"Updated last successful extract : {self.last_successful_extract}")
 
-    def extract(self, last_successfull_extract: dict, **table: dict):
+    def extract(self, last_successful_extract: dict, **table: dict):
         """
             Main Oracle extraction function
             Parameters
             ------------
-                last_successfull_extract: dict
+                last_successful_extract: dict
                     - Required Keys:
                         . last_fetched_value
                 table: dict
@@ -244,8 +245,8 @@ class OracleDatabaseConnection(Connectors):
                 pd.DataFrame : Extracted dataframe from source table
         """
 
-        if last_successfull_extract:
-            self.last_successfull_extract = last_successfull_extract
+        if last_successful_extract:
+            self.last_successful_extract = last_successful_extract
 
         batch_size = table["batch_size"]
         query = table["query"]
@@ -253,8 +254,8 @@ class OracleDatabaseConnection(Connectors):
 
         # If there is a last successfull extract then add incremental clause
         incremental_clause = ""
-        if last_successfull_extract:
-            incremental_clause = self.get_incremental_clause(incremental_columns, last_successfull_extract)
+        if last_successful_extract:
+            incremental_clause = self.get_incremental_clause(incremental_columns, last_successful_extract)
 
             if "where" in query.lower():
                 query += f"and   {incremental_clause}"
@@ -268,7 +269,7 @@ class OracleDatabaseConnection(Connectors):
             try:
                 result_df = next(func)
                 return_args["extraction_status"] = True
-                self.update_last_successfull_extract(incremental_columns, result_df)
+                self.update_last_successful_extract(incremental_columns, result_df)
 
                 yield result_df, return_args
             except StopIteration:
