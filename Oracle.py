@@ -186,10 +186,7 @@ class OracleDatabaseConnection(Connectors):
 
         dynamic_limit = self.get_dynamic_limit(incremental_clause, table_name, batch_size, group_by_column, group_by_format)
         if incremental_clause:
-            if "where "in query.lower():
-                query += f" and {incremental_clause} "
-            else:
-                query += f" where {incremental_clause}  "
+            query += f" and {incremental_clause} "
         
         for index, row in dynamic_limit.iterrows():
             group_by_timestamp = row[0]
@@ -198,11 +195,7 @@ class OracleDatabaseConnection(Connectors):
             if index:
                 next_group_by_timestamp = dynamic_limit.iloc[[index-1]]["GROUP_BY_TIMESTAMP"].to_list()[0]
 
-            updated_query = query
-            if "where "in query.lower():
-                updated_query += f" and {group_by_column} >= TO_DATE('{group_by_timestamp}', '{group_by_format}') "
-            else:
-                updated_query += f" where  {group_by_column} >= TO_DATE('{group_by_timestamp}', '{group_by_format}') "
+            updated_query += f" and {group_by_column} >= TO_DATE('{group_by_timestamp}', '{group_by_format}') "
 
             if next_group_by_timestamp:
                 updated_query += f" and {group_by_column} < TO_DATE('{next_group_by_timestamp}', '{group_by_format}') "
@@ -212,13 +205,13 @@ class OracleDatabaseConnection(Connectors):
 
             yield self.execute_query(updated_query)
 
-    def handle_extract_error(self):
+    def handle_extract_error(self, args):
         pass
 
     def update_last_successful_extract(self, incremental_columns, result_df) -> None:
         print("Updating values")
         for incremental_column in incremental_columns:
-            incremental_column_last_batch_fetched_value = result_df[incremental_column.upper()].max()
+            incremental_column_last_batch_fetched_value = result_df[incremental_column].max()
             if incremental_column in self.last_successful_extract:
                 self.last_successful_extract[incremental_column] = max(self.last_successful_extract[incremental_column], incremental_column_last_batch_fetched_value)
             else:
