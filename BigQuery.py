@@ -87,8 +87,11 @@ class BigQuery(Connectors):
         logger.info(f"Creating DataSet : {self.dataset_name}")
         self.create_dataset()
         logger.info(f"Creating Schema : {self.table_name}")
+
+        schema = []
+        target_types = []
+
         try:
-            schema = []
             for index, row in schema_df.iterrows():
                 column_name = row['COLUMN_NAME']
                 column_name = column_name.strip()
@@ -101,6 +104,7 @@ class BigQuery(Connectors):
                 except:
                     target_data_type = "STRING"
 
+                target_types.append(target_data_type)
                 field = bq.SchemaField(column_name, target_data_type)
                 schema.append(field)
 
@@ -109,6 +113,8 @@ class BigQuery(Connectors):
             logger.info(f"Successfully created schema : {self.table_id}")
         except Conflict:
             logger.info("Schema already exists")
+
+        return target_types
 
     def get_schema(self, **kwargs) -> None:
         pass
