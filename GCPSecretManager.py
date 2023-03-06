@@ -13,8 +13,3 @@ class SecretManager:
         response = self.secretsmanagerclient.access_secret_version(name=name)
         return response.payload.data.decode('UTF-8')
 
-
-if __name__ == "__main__":
-    details = SecretManager("turing-nature-374608").access_secret("oracle_credentials")
-    import json
-    print(type(json.loads(details)))

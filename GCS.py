@@ -14,7 +14,7 @@ logging.basicConfig(format='%(asctime)s,%(msecs)03d %(levelname)-8s [%(filename)
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-from ingestion_core_repo.connectors import Connectors
+from ingestion_integration_repo.ingestion_core_repo.connectors import Connectors
 from google.cloud import storage
 from google.cloud.storage.bucket import Bucket
 from io import StringIO
@@ -28,6 +28,7 @@ class GCS(Connectors):
     def __init__(self, **kwargs) -> None:
 
         self.client = storage.Client()
+        self.config_details = kwargs
         self.bucket_name = kwargs['source_gcs_bucket_name']
         self.bucket_path = f"gs://{self.bucket_name}"
         self.bucket = Bucket.from_string(f"gs://{kwargs['source_gcs_bucket_name']}", client=self.client)
@@ -47,6 +48,11 @@ class GCS(Connectors):
             column_type = re.findall("\'(.*?)\'", str(type(table_sample_data[column].to_list()[0])))[0]
 
             schema_details["DATA_TYPE"].append(column_type)
+
+        print("schema details : ", schema_details)
+        if "source_path" not in schema_details["COLUMN_NAME"]:
+            schema_details["COLUMN_NAME"].append("source_path")
+            schema_details["DATA_TYPE"].append("str")
 
         schema_details = pd.DataFrame(schema_details)
         schema_details["NULLABLE"] = ['Y'] * len(schema_details)
@@ -89,14 +95,13 @@ class GCS(Connectors):
             df = self.read_xml(file_path)
         elif file_path.endswith(".json"):
             df = self.read_json(file_path)
-
         return df
 
     def read_file_as_blob(self, blob: Bucket.blob) -> pd.DataFrame:
         content = blob.download_as_string()
         content = content.decode('utf-8')
 
-        content = StringIO(content)  # tranform bytes to string here
+        content = StringIO(content)  # trasnform bytes to string here
 
         datas = csv.reader(content)
         df = pd.DataFrame(datas)
@@ -179,7 +184,12 @@ class GCS(Connectors):
         new_path = old_path.replace("queue", "processed")
         return new_path
 
+    def get_batch_size(self):
+        if 'batch_size' in self.config_details['batch_size']:
+            return self.config_details['batch_size']
+
     def extract(self, last_successful_extract, **kwargs):
+        print("File path : ", self.file_path)
         return_args = {"extraction_status": False, "file_name": ""}
 
         if last_successful_extract:
@@ -196,11 +206,12 @@ class GCS(Connectors):
                     file_path = f"gs://{self.bucket_name}/{blob.name}"
                     file_data = self.read_file(file_path)
                     file_data = self.rectify_column_names(file_data)
+                    file_data["source_path"] = [f"{self.bucket_name}/{blob.name}"] * len(file_data)
 
                     return_args["extraction_status"] = True
                     processed_folder_path = self.get_processed_folder_path(blob.name)
                     logger.info(f"Moving file {blob.name.split('/')[-1]} to processed folder")
-                    self.move_blob(self.bucket_name, blob.name, self.bucket_name, processed_folder_path)
+                    # self.move_blob(self.bucket_name, blob.name, self.bucket_name, processed_folder_path)
                     yield file_data, return_args
 
             except Exception as e:
