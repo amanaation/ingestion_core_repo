@@ -225,7 +225,3 @@ class BigQuery(Connectors):
             df, self.table_id, job_config=job_config
         )
         job.result()
-
-
-if __name__ == "__main__":
-    BigQuery("temp", "test_table", **{"target_project_id": "turing-nature-374608"}).create_schema(pd.DataFrame({"COLUMN_NAME": [], "DATA_TYPE": []}), "oracle")
