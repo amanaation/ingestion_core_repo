@@ -188,7 +188,7 @@ class GCS(Connectors):
         if 'batch_size' in self.config_details['batch_size']:
             return self.config_details['batch_size']
 
-    def extract(self, last_successful_extract, **kwargs):
+    def extract(self, last_successful_extract):
         print("File path : ", self.file_path)
         return_args = {"extraction_status": False, "file_name": ""}
 

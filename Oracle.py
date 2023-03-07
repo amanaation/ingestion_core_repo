@@ -26,6 +26,7 @@ class OracleDatabaseConnection(Connectors):
     def __init__(self, **kwargs) -> None:
 
         logger.info("Creating connection")
+        self.table_details = kwargs
         connection_details = self.get_connection_details(kwargs["connections"][0])
 
         self.engine = create_engine(f'''oracle+cx_oracle://
@@ -133,68 +134,68 @@ class OracleDatabaseConnection(Connectors):
         result = pd.read_sql(sql, self.connection)
         return result
 
-    def create_dynamic_limit_query(self, incremental_clause, table_name, group_by_column, group_by_format):
+    def create_dynamic_limit_query(self, incremental_clause, table_name, group_by_columns):
+        select_clause = ""
+        group_by_clause = ""
+        order_by_clause = ""
+
+        for column in group_by_columns:
+            column_details = group_by_columns[column]
+
+            if "column_type" in column_details and column_details["column_type"] == "timestamp":
+                select_clause += f"  TRUNC( {column}, '{column_details['group_by_format']}') as {column} ,"
+                group_by_clause += f"  TRUNC( {column}, '{column_details['group_by_format']}') ,"
+                order_by_clause += f" {column} ,"
+            else:
+                select_clause += f"  {column} ,"
+                group_by_clause += f" {column} ,"
+
+        select_clause = select_clause[:-1]
+        group_by_clause = group_by_clause[:-1]
+        order_by_clause = order_by_clause[:-1]
+
+        if order_by_clause:
+            order_by_clause += " asc"
+
         if incremental_clause:
-            dynamic_limit_query = """select TRUNC({}, '{}') as group_by_timestamp, 
-                                    count(*) as row_count from {} where {} group by TRUNC({}, '{}')  
-                                    order by group_by_timestamp asc"""
-            dynamic_limit_query = dynamic_limit_query.format(group_by_column, group_by_format, table_name,
-                                                             incremental_clause, group_by_column, group_by_format)
+            dynamic_limit_query = """select count(*) as ROW_COUNT, {} from {} where {} group by {} 
+                                    order by {}"""
+            dynamic_limit_query = dynamic_limit_query.format(select_clause, table_name,
+                                                             incremental_clause, group_by_clause, order_by_clause)
 
         else:
-            dynamic_limit_query = """select TRUNC({}, '{}') as group_by_timestamp, 
-                                    count(*) as row_count from {} group by TRUNC({}, '{}')  
-                                    order by group_by_timestamp asc"""
+            dynamic_limit_query = """select count(*) as ROW_COUNT, {} from {} group by {} 
+                                    order by {}"""
 
-            dynamic_limit_query = dynamic_limit_query.format(group_by_column, group_by_format, table_name,
-                                                             group_by_column, group_by_format)
+            dynamic_limit_query = dynamic_limit_query.format(select_clause, table_name,
+                                                             group_by_clause, order_by_clause)
 
         return dynamic_limit_query
 
     def get_dynamic_limit(self, incremental_clause: dict,
                           table_name: str,
                           batch_size: int,
-                          group_by_column: dict, ):
-        # group_by_formats = ["yy", "mm", "iw", "dd", "hh"]
-        group_by_formats = ["hh", "dd", "iw", "mm", "yy"]
+                          group_by_columns: dict, ):
+        dynamic_limit_query = self.create_dynamic_limit_query(incremental_clause, table_name, group_by_columns)
+        logger.info(f"Dynamic Limit query : {dynamic_limit_query}")
+        result = self.execute_query(dynamic_limit_query)
 
-        group_by_formats_description = {"hh": "Hourly", "dd": "Daily", "iw": "Weekly", "mm": "Monthly", "yy": "Yearly"}
-
-        for i in range(len(group_by_formats)):
-            group_by_format = group_by_formats[i]
-            dynamic_limit_query = self.create_dynamic_limit_query(incremental_clause, table_name,
-                                                                  group_by_column, group_by_format)
-
-            # print("dynamic_limit_query : ", dynamic_limit_query)
-
-            result = self.execute_query(dynamic_limit_query)
-            if result["ROW_COUNT"].max() >= batch_size:
-                if i:
-                    i = i - 1
-                break
-
-        group_by_format = group_by_formats[i]
-        logger.info(f"Extracting Data by grouping it in {group_by_formats_description[group_by_format]} batches")
-
-        final_dynamic_limit_query = self.create_dynamic_limit_query(incremental_clause, table_name,
-                                                                    group_by_column, group_by_format)
-
-        print("final_dynamic_limit_query : ", final_dynamic_limit_query)
-        result = self.execute_query(final_dynamic_limit_query)
+        result.columns = [column.lower() for column in result.columns]
         logger.info(f"Created {len(result)} batches")
 
         return result
 
     def execute_batches(self,
                         query: str,
-                        incremental_clause: str,
+                        incremental_clause: dict,
                         table_name: str,
                         batch_size: int,
-                        group_by_column: str,
-                        group_by_format: str) -> pd.DataFrame:
+                        group_by_columns: dict
+                        ) -> pd.DataFrame:
 
         """
 
+        :param group_by_columns:
         :param query:
         :param incremental_clause:
         :param table_name:
@@ -204,27 +205,28 @@ class OracleDatabaseConnection(Connectors):
         :return:
         """
 
-        dynamic_limit = self.get_dynamic_limit(incremental_clause, table_name, batch_size, group_by_column)
+        dynamic_limit = self.get_dynamic_limit(incremental_clause, table_name, batch_size, group_by_columns)
         if incremental_clause:
             query += f" and {incremental_clause} "
 
         for index, row in dynamic_limit.iterrows():
-            group_by_timestamp = row[0]
-            next_group_by_timestamp = ""
+            row = row.to_dict()
 
-            if index < len(dynamic_limit) - 1:
-                next_group_by_timestamp = dynamic_limit.iloc[[index + 1]]["GROUP_BY_TIMESTAMP"].to_list()[0]
+            for column in group_by_columns:
 
-            updated_query = query + f" and {group_by_column} >= TO_DATE('{group_by_timestamp}', '{group_by_format}') "
+                if "column_type" in group_by_columns[column] and group_by_columns[column]["column_type"] == "timestamp":
+                    updated_query = query + f" and TRUNC({column}, '{group_by_columns[column]['group_by_format']}') = " \
+                                            f"TO_DATE('{row[column]}', '{group_by_columns[column]['column_format']}')"
 
-            if next_group_by_timestamp:
-                updated_query += f" and {group_by_column} < TO_DATE('{next_group_by_timestamp}', '{group_by_format}') "
+                else:
+                    if type(row[column]) is str:
+                        updated_query += f"  and {column} = '{row[column]}'  "
+                    elif type(row[column]) is int:
+                        updated_query += f"  and {column} = {row[column]}  "
 
             logger.info(f"Running query : {updated_query}")
-            logger.info(f"Fetched data for {group_by_timestamp}")
-
             result = self.execute_query(updated_query)
-
+            logger.info(f"Fetched {len(result)} records ")
             yield result
 
     def handle_extract_error(self, args):
@@ -239,7 +241,7 @@ class OracleDatabaseConnection(Connectors):
                 incremental_column_last_batch_fetched_value = result_df[incremental_column.upper()].max()
                 if incremental_column in self.last_successful_extract:
                     if "column_type" in incremental_columns[incremental_column] and \
-                            incremental_columns[incremental_column]["column_type"] == "timestamp"\
+                            incremental_columns[incremental_column]["column_type"] == "timestamp" \
                             and type(self.last_successful_extract[incremental_column]) is str:
                         self.last_successful_extract[incremental_column] = ciso8601.parse_datetime(
                             self.last_successful_extract[incremental_column])
@@ -271,6 +273,7 @@ class OracleDatabaseConnection(Connectors):
                 pd.DataFrame : Extracted dataframe from source table
         """
 
+        table = self.table_details
         if last_successful_extract:
             self.last_successful_extract = last_successful_extract
 
@@ -291,8 +294,7 @@ class OracleDatabaseConnection(Connectors):
 
         return_args = {"extraction_status": False}
 
-        func = self.execute_batches(query, incremental_clause, table["name"], batch_size,
-                                    table["groupby_column"], table["groupby_format"])
+        func = self.execute_batches(query, incremental_clause, table["name"], batch_size, table["group_by_columns"])
         while True:
             try:
                 result_df = next(func)

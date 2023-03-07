@@ -3,6 +3,7 @@ import pandas as pd
 import sys
 
 sys.path.append('../')
+sys.path.append('../../')
 
 logging.basicConfig(format='%(asctime)s,%(msecs)03d %(levelname)-8s [%(filename)s:%(lineno)d] %(message)s',
                     datefmt='%Y-%m-%d:%H:%M:%S',
@@ -112,6 +113,9 @@ class BigQuery(Connectors):
                 field = bq.SchemaField(column_name, target_data_type)
                 schema.append(field)
 
+            schema.append(bq.SchemaField("created_at", "TIMESTAMP", default_value_expression="CURRENT_TIMESTAMP"))
+            schema.append(bq.SchemaField("updated_at", "TIMESTAMP", default_value_expression="CURRENT_TIMESTAMP"))
+
             table = bq.Table(self.table_id, schema=schema)
             self.client.create_table(table)
             logger.info(f"Successfully created schema : {self.table_id}")
@@ -147,7 +151,7 @@ class BigQuery(Connectors):
         for column in merge_columns:
             _on_clause += f" _target.{column} = _source.{column} and"
 
-        _on_clause = _on_clause [:-3]
+        _on_clause = _on_clause[:-3]
         return _on_clause
 
     def get_update_upsert_clause(self, columns):
@@ -221,3 +225,7 @@ class BigQuery(Connectors):
             df, self.table_id, job_config=job_config
         )
         job.result()
+
+
+if __name__ == "__main__":
+    BigQuery("temp", "test_table", **{"target_project_id": "turing-nature-374608"}).create_schema(pd.DataFrame({"COLUMN_NAME": [], "DATA_TYPE": []}), "oracle")
