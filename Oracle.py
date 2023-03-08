@@ -6,6 +6,7 @@ import oracledb
 import os
 import pandas as pd
 import warnings
+import numpy as np
 
 from dotenv import load_dotenv
 from ingestion_integration_repo.ingestion_core_repo.connectors import Connectors
@@ -46,7 +47,6 @@ class OracleDatabaseConnection(Connectors):
     def get_connection_details(self, secret_id):
         project_id = os.getenv("SECRET_PROJECT_ID")
 
-        print("secret_id : ", secret_id, project_id)
         sm = SecretManager(project_id)
 
         connection_details = json.loads(sm.access_secret(secret_id))
@@ -67,14 +67,15 @@ class OracleDatabaseConnection(Connectors):
 
         table_name = args[0]
         table_data = args[1]
-        schema_details_query = f"""SELECT column_name, data_type, nullable
-                                  FROM USER_TAB_COLUMNS
-                                  WHERE table_name = '{table_name.upper()}' """
+        schema_details_query = f"""SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION, 
+        DATA_SCALE FROM ALL_TAB_COLUMNS WHERE TABLE_NAME = '{table_name.upper()}'"""
 
         schema_details = pd.read_sql(schema_details_query, self.connection)
         columns = table_data.columns.to_list()
         schema_details = schema_details[schema_details["COLUMN_NAME"].isin(map(str.upper, columns))]
-        return schema_details
+
+        schema_details.loc[schema_details['DATA_SCALE'] > 0, ['DATA_TYPE']] = 'FLOAT'
+        return schema_details[["COLUMN_NAME", "DATA_TYPE"]]
 
     def get_incremental_clause(self, incremental_columns: dict, last_successful_extract: dict) -> str:
 
@@ -145,7 +146,6 @@ class OracleDatabaseConnection(Connectors):
             if "column_type" in column_details and column_details["column_type"] == "timestamp":
                 select_clause += f"  TRUNC( {column}, '{column_details['group_by_format']}') as {column} ,"
                 group_by_clause += f"  TRUNC( {column}, '{column_details['group_by_format']}') ,"
-                order_by_clause += f" {column} ,"
             else:
                 select_clause += f"  {column} ,"
                 group_by_clause += f" {column} ,"
@@ -154,21 +154,21 @@ class OracleDatabaseConnection(Connectors):
         group_by_clause = group_by_clause[:-1]
         order_by_clause = order_by_clause[:-1]
 
+        if incremental_clause:
+            dynamic_limit_query = """select count(*) as ROW_COUNT, {} from {} where {} group by {} """
+            dynamic_limit_query = dynamic_limit_query.format(select_clause, table_name,
+                                                             incremental_clause, group_by_clause)
+
+        else:
+            dynamic_limit_query = """select count(*) as ROW_COUNT, {} from {} group by {} """
+
+            dynamic_limit_query = dynamic_limit_query.format(select_clause, table_name,
+                                                             group_by_clause)
+
         if order_by_clause:
             order_by_clause += " asc"
 
-        if incremental_clause:
-            dynamic_limit_query = """select count(*) as ROW_COUNT, {} from {} where {} group by {} 
-                                    order by {}"""
-            dynamic_limit_query = dynamic_limit_query.format(select_clause, table_name,
-                                                             incremental_clause, group_by_clause, order_by_clause)
-
-        else:
-            dynamic_limit_query = """select count(*) as ROW_COUNT, {} from {} group by {} 
-                                    order by {}"""
-
-            dynamic_limit_query = dynamic_limit_query.format(select_clause, table_name,
-                                                             group_by_clause, order_by_clause)
+            dynamic_limit_query += f" order by {order_by_clause}"
 
         return dynamic_limit_query
 
@@ -204,28 +204,40 @@ class OracleDatabaseConnection(Connectors):
         :param group_by_format:
         :return:
         """
+        if group_by_columns:
+            dynamic_limit = self.get_dynamic_limit(incremental_clause, table_name, batch_size, group_by_columns)
 
-        dynamic_limit = self.get_dynamic_limit(incremental_clause, table_name, batch_size, group_by_columns)
-        if incremental_clause:
-            query += f" and {incremental_clause} "
+            for index, row in dynamic_limit.iterrows():
+                row = row.to_dict()
+                updated_query = query
 
-        for index, row in dynamic_limit.iterrows():
-            row = row.to_dict()
+                for column in group_by_columns:
+                    print(row[column], type(row[column]))
 
-            for column in group_by_columns:
+                    if "column_type" in group_by_columns[column] and group_by_columns[column]["column_type"] \
+                            == "timestamp":
+                        updated_query = query + f" and TRUNC({column}, '{group_by_columns[column]['group_by_format']}') = " \
+                                                f"TO_DATE('{row[column]}', '{group_by_columns[column]['column_format']}')"
 
-                if "column_type" in group_by_columns[column] and group_by_columns[column]["column_type"] == "timestamp":
-                    updated_query = query + f" and TRUNC({column}, '{group_by_columns[column]['group_by_format']}') = " \
-                                            f"TO_DATE('{row[column]}', '{group_by_columns[column]['column_format']}')"
+                    else:
+                        if type(row[column]) is str:
+                            updated_query += f"  and {column} = '{row[column]}'  "
+                        elif type(row[column]) is None or row[column] is None or row[column] is np.nan:
+                            updated_query += f"  and {column} is null  "
 
-                else:
-                    if type(row[column]) is str:
-                        updated_query += f"  and {column} = '{row[column]}'  "
-                    elif type(row[column]) is int:
-                        updated_query += f"  and {column} = {row[column]}  "
+                        else:
+                            updated_query += f"  and {column} = {row[column]}  "
 
-            logger.info(f"Running query : {updated_query}")
-            result = self.execute_query(updated_query)
+                            print(type(row[column]), row[column], "Inside else")
+
+                logger.info(f"Running query : {updated_query}")
+                result = self.execute_query(updated_query)
+                logger.info(f"Fetched {len(result)} records ")
+                yield result
+
+        else:
+            logger.info(f"Running query : {query}")
+            result = self.execute_query(query)
             logger.info(f"Fetched {len(result)} records ")
             yield result
 
@@ -283,18 +295,26 @@ class OracleDatabaseConnection(Connectors):
         if "where_clause" in table and table["where_clause"]:
             query += f" and  {table['where_clause']}"
 
-        incremental_columns = table["incremental_column"]
+        if "incremental_column" in table:
+            incremental_columns = table["incremental_column"]
+        else:
+            incremental_columns = {}
+
+        if "group_by_columns" in table:
+            group_by_columns = table["group_by_columns"]
+        else:
+            group_by_columns = {}
 
         # If there is a last successful extract then add incremental clause
         incremental_clause = ""
         if last_successful_extract:
             incremental_clause = self.get_incremental_clause(incremental_columns, last_successful_extract)
-
-            query += f"and   {incremental_clause}"
+            if incremental_clause:
+                query += f"and   {incremental_clause}"
 
         return_args = {"extraction_status": False}
 
-        func = self.execute_batches(query, incremental_clause, table["name"], batch_size, table["group_by_columns"])
+        func = self.execute_batches(query, incremental_clause, table["name"], batch_size, group_by_columns)
         while True:
             try:
                 result_df = next(func)

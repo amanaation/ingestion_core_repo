@@ -55,6 +55,7 @@ class BigQuery(Connectors):
         # Creating BigQuery client
         self.client = bq.Client()
         self.last_successful_values = {}
+        self.source_schema = {}
 
     def get_table_id(self, dataset_name, destination_table_name):
         self.table_id = f"{self.project_id}.{dataset_name}.{destination_table_name}"
@@ -95,6 +96,7 @@ class BigQuery(Connectors):
 
         schema = []
         target_types = []
+        self.source_schema = schema_df
 
         try:
             for index, row in schema_df.iterrows():
@@ -113,8 +115,11 @@ class BigQuery(Connectors):
                 field = bq.SchemaField(column_name, target_data_type)
                 schema.append(field)
 
-            schema.append(bq.SchemaField("created_at", "TIMESTAMP", default_value_expression="CURRENT_TIMESTAMP"))
-            schema.append(bq.SchemaField("updated_at", "TIMESTAMP", default_value_expression="CURRENT_TIMESTAMP"))
+            schema.append(bq.SchemaField("created_at", "TIMESTAMP"))
+            schema.append(bq.SchemaField("updated_at", "TIMESTAMP"))
+
+            # schema.append(bq.SchemaField("created_at", "TIMESTAMP", default_value_expression="CURRENT_TIMESTAMP"))
+            # schema.append(bq.SchemaField("updated_at", "TIMESTAMP", default_value_expression="CURRENT_TIMESTAMP"))
 
             table = bq.Table(self.table_id, schema=schema)
             self.client.create_table(table)
@@ -123,6 +128,43 @@ class BigQuery(Connectors):
             logger.info("Schema already exists")
 
         return target_types
+
+
+    #
+    # def create_schema(self, schema_df: pd.DataFrame, source: str) -> None:
+    #     """
+    #         Create schema in bigquery if not exists
+    #         Parameters
+    #         ----------
+    #             schema_df : Source schema details in a dataframe
+    #             source: Name of the source e.g. oracle/bq
+    #
+    #         Returns
+    #         ----------
+    #         None
+    #     """
+    #     logger.info(f"Creating DataSet : {self.dataset_name}")
+    #     self.create_dataset()
+    #     logger.info(f"Creating Schema : {self.destination_table_name}")
+    #
+    #     schema = []
+    #     target_types = []
+    #     for index, row in schema_df.iterrows():
+    #         column_name = row['COLUMN_NAME']
+    #         column_name = column_name.strip()
+    #         data_type = row['DATA_TYPE']
+    #
+    #         schema.append(bq.SchemaField(column_name, data_type))
+    #     schema.append(bq.SchemaField("created_at", "TIMESTAMP"))
+    #     schema.append(bq.SchemaField("updated_at", "TIMESTAMP"))
+    #
+    #     try:
+    #         table = bq.Table(self.table_id, schema=schema)
+    #         self.client.create_table(table)
+    #         logger.info(f"Successfully created schema : {self.table_id}")
+    #         print("Destination_Schema : ", schema_df)
+    #     except Conflict:
+    #         logger.info("Schema already exists")
 
     def get_schema(self, **kwargs) -> None:
         pass
@@ -173,7 +215,7 @@ class BigQuery(Connectors):
     def delete_temp_table(self, table_name):
         logger.info(f"Deleting temp table : {table_name}")
         _delete_query = f"drop table  {table_name}"
-        self.execute(_delete_query, self.project_id)
+        # self.execute(_delete_query, self.project_id)
         logger.info(f"Successfully deleted temp table : {table_name}")
 
     def upsert_data(self, source_table_id, target_table_id, source_schema_df):
@@ -204,9 +246,25 @@ class BigQuery(Connectors):
 
         self.execute(_merge_query, self.project_id)
         logger.info(f"Successfully merged source and destination table")
-        # self.delete_temp_table(source_table_id)
+        self.delete_temp_table(source_table_id)
 
-    def save(self, df: pd.DataFrame, write_mode='a') -> None:
+    def segregate(self, df, write_mode='append'):
+        integer_columns = list(map(str.lower, self.source_schema[self.source_schema["DATA_TYPE"] == "NUMBER"]["COLUMN_NAME"]))
+
+        data_with_integer_columns_as_null = df[df.loc[:, integer_columns].isnull().any(axis='columns')]
+        data_with_integer_columns_as_not_null = df[~df.loc[:, integer_columns].isnull().any(axis='columns')]
+        for index, row in data_with_integer_columns_as_null.iterrows():
+            row = row.to_dict()
+            df2 = df[df[self.table_config_details['primary_columns'][0]] == row[self.table_config_details['primary_columns'][0]]]
+            df2.dropna(inplace=True, axis=1)
+            self.save(df2, write_mode)
+
+        if not data_with_integer_columns_as_null.empty:
+            write_mode = 'append'
+        data_with_integer_columns_as_not_null[integer_columns] = data_with_integer_columns_as_not_null[integer_columns].astype(int)
+        self.save(data_with_integer_columns_as_not_null, write_mode=write_mode)
+
+    def save(self, df: pd.DataFrame, write_mode='append', dataframe_is_table_data=False) -> None:
         """
             This function writes the dataframe to bigquery
 
@@ -220,7 +278,12 @@ class BigQuery(Connectors):
             :param write_mode:
         """
 
-        job_config = bq.LoadJobConfig()
+        if dataframe_is_table_data:
+            self.segregate(df, write_mode)
+
+        bq_write_modes_mapping = {'append': 'WRITE_APPEND', 'truncate': 'WRITE_TRUNCATE'}
+
+        job_config = bq.LoadJobConfig(write_disposition=bq_write_modes_mapping[write_mode])
         job = self.client.load_table_from_dataframe(
             df, self.table_id, job_config=job_config
         )

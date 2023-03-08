@@ -219,5 +219,5 @@ class GCS(Connectors):
                 logger.info(f"Moving file to error bucket ")
                 yield pd.DataFrame({"": [], "": []}), return_args
 
-    def save(self, df: pd.DataFrame) -> None:
+    def save(self, df: pd.DataFrame, *args) -> None:
         pass
