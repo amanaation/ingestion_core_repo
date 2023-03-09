@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore")
 load_dotenv()
+pd.set_option('display.max_columns', None)
+pd.set_option('display.max_colwidth', None)
+
 
 
 class OracleDatabaseConnection(Connectors):
@@ -66,13 +69,12 @@ class OracleDatabaseConnection(Connectors):
         """
 
         table_name = args[0]
-        table_data = args[1]
         schema_details_query = f"""SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION, 
         DATA_SCALE FROM ALL_TAB_COLUMNS WHERE TABLE_NAME = '{table_name.upper()}'"""
 
         schema_details = pd.read_sql(schema_details_query, self.connection)
-        columns = table_data.columns.to_list()
-        schema_details = schema_details[schema_details["COLUMN_NAME"].isin(map(str.upper, columns))]
+        if "drop_columns" in self.table_details:
+            schema_details = schema_details[~schema_details["COLUMN_NAME"].isin(self.table_details['drop_columns'])]
 
         schema_details.loc[schema_details['DATA_SCALE'] > 0, ['DATA_TYPE']] = 'FLOAT'
         return schema_details[["COLUMN_NAME", "DATA_TYPE"]]
@@ -115,7 +117,7 @@ class OracleDatabaseConnection(Connectors):
                 elif incremental_column["column_type"] == "id":
                     incremental_clause += f""" {incremental_column_name} > {last_successful_extract[incremental_column_name]}"""
 
-                incremental_clause += " and"
+                incremental_clause += " or "
 
         if incremental_clause:
             incremental_clause = incremental_clause[:-4]
@@ -180,6 +182,7 @@ class OracleDatabaseConnection(Connectors):
         logger.info(f"Dynamic Limit query : {dynamic_limit_query}")
         result = self.execute_query(dynamic_limit_query)
 
+        print(result)
         result.columns = [column.lower() for column in result.columns]
         logger.info(f"Created {len(result)} batches")
 
