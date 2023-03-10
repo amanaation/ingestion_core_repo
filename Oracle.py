@@ -148,6 +148,7 @@ class OracleDatabaseConnection(Connectors):
             if "column_type" in column_details and column_details["column_type"] == "timestamp":
                 select_clause += f"  TRUNC( {column}, '{column_details['group_by_format']}') as {column} ,"
                 group_by_clause += f"  TRUNC( {column}, '{column_details['group_by_format']}') ,"
+                order_by_clause += f" {column} "
             else:
                 select_clause += f"  {column} ,"
                 group_by_clause += f" {column} ,"
@@ -182,7 +183,6 @@ class OracleDatabaseConnection(Connectors):
         logger.info(f"Dynamic Limit query : {dynamic_limit_query}")
         result = self.execute_query(dynamic_limit_query)
 
-        print(result)
         result.columns = [column.lower() for column in result.columns]
         logger.info(f"Created {len(result)} batches")
 

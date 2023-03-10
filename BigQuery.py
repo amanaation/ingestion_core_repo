@@ -122,13 +122,14 @@ class BigQuery(Connectors):
 
                 create_columns_clause += f" {column_name}  {target_data_type} ,"
 
-            self.dest_schema.append(bq.SchemaField("created_at", "timetstamp"))
-            self.dest_schema.append(bq.SchemaField("updated_at", "timetstamp"))
+            if "created_at " not in create_columns_clause:
+                self.dest_schema.append(bq.SchemaField("created_at", "timetstamp"))
+                create_columns_clause += """ created_at timestamp default current_timestamp ,"""
+            if "updated_at " not in create_columns_clause:
+                self.dest_schema.append(bq.SchemaField("updated_at", "timetstamp"))
+                create_columns_clause += """ updated_at timestamp default current_timestamp ,"""
 
-            create_columns_clause += """created_at timestamp default current_timestamp, updated_at timestamp default 
-            current_timestamp"""
-
-            create_query = f"Create table {self.table_id} ( {create_columns_clause}  )"
+            create_query = f"Create table {self.table_id} ( {create_columns_clause[:-1]}  )"
             print("Create Query : ", create_query)
             from pprint import pprint
             # pprint(self.dest_schema)
