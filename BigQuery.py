@@ -122,18 +122,20 @@ class BigQuery(Connectors):
 
                 create_columns_clause += f" {column_name}  {target_data_type} ,"
 
-            if "created_at " not in create_columns_clause:
+            if "connections " not in create_columns_clause:
+                self.dest_schema.append(bq.SchemaField("connections", "string"))
+                create_columns_clause += """ connections string  ,"""
+            elif "created_at " not in create_columns_clause:
                 self.dest_schema.append(bq.SchemaField("created_at", "timetstamp"))
                 create_columns_clause += """ created_at timestamp default current_timestamp ,"""
-            if "updated_at " not in create_columns_clause:
+            elif "updated_at " not in create_columns_clause:
                 self.dest_schema.append(bq.SchemaField("updated_at", "timetstamp"))
                 create_columns_clause += """ updated_at timestamp default current_timestamp ,"""
 
             create_query = f"Create table {self.table_id} ( {create_columns_clause[:-1]}  )"
             print("Create Query : ", create_query)
-            from pprint import pprint
-            # pprint(self.dest_schema)
             self.execute(create_query, self.project_id)
+
             logger.info(f"Successfully created schema : {self.table_id}")
         except Conflict:
             logger.info("Schema already exists")

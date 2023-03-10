@@ -109,15 +109,16 @@ class OracleDatabaseConnection(Connectors):
             incremental_column = incremental_columns[incremental_column_name]
             if incremental_column_name in last_successful_extract:
 
-                if incremental_column["column_type"] == "timestamp":
-                    incremental_clause += f"""  {incremental_column_name} > 
+                if "column_type" in incremental_column and incremental_column["column_type"] == "timestamp":
+                    incremental_clause += f"""  {incremental_column_name} >= 
                                         TO_DATE('{last_successful_extract[incremental_column_name]}', 
                                         '{incremental_column["column_format"]}') """
+                elif incremental_column["column_type"] == "int":
+                    incremental_clause += f""" {incremental_column_name} >= {last_successful_extract[incremental_column_name]}"""
+                elif incremental_column["column_type"] == "str":
+                    incremental_clause += f""" {incremental_column_name} >= '{last_successful_extract[incremental_column_name]}'"""
 
-                elif incremental_column["column_type"] == "id":
-                    incremental_clause += f""" {incremental_column_name} > {last_successful_extract[incremental_column_name]}"""
-
-                incremental_clause += " or "
+                incremental_clause += " and "
 
         if incremental_clause:
             incremental_clause = incremental_clause[:-4]
@@ -148,10 +149,10 @@ class OracleDatabaseConnection(Connectors):
             if "column_type" in column_details and column_details["column_type"] == "timestamp":
                 select_clause += f"  TRUNC( {column}, '{column_details['group_by_format']}') as {column} ,"
                 group_by_clause += f"  TRUNC( {column}, '{column_details['group_by_format']}') ,"
-                order_by_clause += f" {column} "
             else:
                 select_clause += f"  {column} ,"
                 group_by_clause += f" {column} ,"
+            order_by_clause += f" {column} ,"
 
         select_clause = select_clause[:-1]
         group_by_clause = group_by_clause[:-1]
@@ -219,8 +220,13 @@ class OracleDatabaseConnection(Connectors):
 
                     if "column_type" in group_by_columns[column] and group_by_columns[column]["column_type"] \
                             == "timestamp":
-                        updated_query = query + f" and TRUNC({column}, '{group_by_columns[column]['group_by_format']}') = " \
-                                                f"TO_DATE('{row[column]}', '{group_by_columns[column]['column_format']}')"
+
+                        if row[column] is not None:
+                            updated_query = query + f" and TRUNC({column}, '{group_by_columns[column]['group_by_format']}') = " \
+                                                    f"TO_DATE('{row[column]}', '{group_by_columns[column]['column_format']}')"
+
+                        else:
+                            updated_query = query + f" and TRUNC({column}, '{group_by_columns[column]['group_by_format']}') is Null "
 
                     else:
                         if type(row[column]) is str:
