@@ -158,7 +158,7 @@ class BigQuery(Connectors):
         """
         try:
             return pd.read_gbq(sql, project_id=project_id)
-        except TableCreationError:
+        except:
             pass
 
     def extract(self, sql, project_id) -> None:
@@ -225,45 +225,11 @@ class BigQuery(Connectors):
         logger.info(f"Successfully merged source and destination table")
         self.delete_temp_table(source_table_id)
 
-    def segregate(self, df, write_mode='append'):
-        integer_columns = list(
-            map(str.lower, self.source_schema[self.source_schema["DATA_TYPE"] == "NUMBER"]["COLUMN_NAME"]))
-        data_with_integer_columns_as_null = df[df.loc[:, integer_columns].isnull().any(axis='columns')]
-        data_with_integer_columns_as_not_null = df[~df.loc[:, integer_columns].isnull().any(axis='columns')]
-
-        for index, row in data_with_integer_columns_as_null.iterrows():
-            row = row.to_dict()
-            df2 = df[df[self.table_config_details['primary_columns'][0]] == row[
-                self.table_config_details['primary_columns'][0]]]
-            df2.dropna(inplace=True, axis=1)
-            self.save(df2, write_mode)
-
-        if not data_with_integer_columns_as_null.empty:
-            write_mode = 'append'
-
-        data_with_integer_columns_as_not_null[integer_columns] = data_with_integer_columns_as_not_null[
-            integer_columns].astype(int)
-        self.save(data_with_integer_columns_as_not_null, write_mode=write_mode)
-
-    def segregate2(self):
-        integer_columns = list(
-            map(str.lower, self.source_schema[self.source_schema["DATA_TYPE"] == "NUMBER"]["COLUMN_NAME"]))
-        data_with_integer_columns_as_null = df[df.loc[:, integer_columns].isnull().any(axis='columns')]
-        data_with_integer_columns_as_not_null = df[~df.loc[:, integer_columns].isnull().any(axis='columns')]
-
-        data_with_integer_columns_as_not_null[integer_columns] = data_with_integer_columns_as_not_null[
-            integer_columns].astype(int)
-        self.save(data_with_integer_columns_as_not_null, write_mode=write_mode)
-
-        if not data_with_integer_columns_as_not_null.empty:
-            write_mode = 'append'
-
-        for index, row in data_with_integer_columns_as_null.iterrows():
-            row = row.to_dict()
-            df2 = df[df[self.table_config_details['primary_columns'][0]] == row[
-                self.table_config_details['primary_columns'][0]]]
-            df2.dropna(inplace=True, axis=1)
-            self.save(df2, write_mode)
+    def preprocess_destination(self, result_df):
+        if "source_path" in result_df.columns and not result_df.empty:
+            _delete_query = f"delete from {self.table_id} where source_path='{result_df['source_path'].iloc[0]}'"
+            print("delete query : ", _delete_query)
+            self.execute(_delete_query, self.project_id)
 
     def save(self, df: pd.DataFrame, write_mode='append', dataframe_is_table_data=False) -> None:
         """
@@ -286,6 +252,9 @@ class BigQuery(Connectors):
         bq_write_modes_mapping = {'append': 'WRITE_APPEND', 'truncate': 'WRITE_TRUNCATE'}
 
         # print(df.head())
+        if write_mode == 'append':
+            self.preprocess_destination(df)
+
         job_config = bq.LoadJobConfig(write_disposition=bq_write_modes_mapping[write_mode],
                                       )
         job = self.client.load_table_from_dataframe(

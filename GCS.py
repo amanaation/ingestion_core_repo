@@ -45,11 +45,23 @@ class GCS(Connectors):
         schema_details = {"COLUMN_NAME": [], "DATA_TYPE": []}
         for column in table_sample_data.columns:
             schema_details["COLUMN_NAME"].append(column)
-            column_type = re.findall("\'(.*?)\'", str(type(table_sample_data[column].to_list()[0])))[0]
+            column_data = table_sample_data[column].dropna()
+            if not column_data.empty:
+                column_type = re.findall("\'(.*?)\'", str(type(column_data.iloc[0])))[0]
+                if "int" in column_type.lower():
+                    column_type = "INT"
+                elif "float" in column_type.lower():
+                    column_type = "FLOAT"
+                elif "time" in column_type.lower():
+                    column_type = "TIMESTAMP"
+                elif "STR" in column_type.lower() or "CHAR" in column_type.lower():
+                    column_type = "STR"
+                else:
+                    column_type = "STR"
 
-            schema_details["DATA_TYPE"].append(column_type)
+                schema_details["DATA_TYPE"].append(column_type)
 
-        print("schema details : ", schema_details)
+        # print("schema details : ", schema_details)
         if "source_path" not in schema_details["COLUMN_NAME"]:
             schema_details["COLUMN_NAME"].append("source_path")
             schema_details["DATA_TYPE"].append("str")
