@@ -48,11 +48,17 @@ class OracleDatabaseConnection(Connectors):
         logger.info("Connection created successfully with source")
 
     def get_connection_details(self, secret_id):
-        project_id = os.getenv("SECRET_PROJECT_ID")
+        # project_id = os.getenv("SECRET_PROJECT_ID")
+        # sm = SecretManager(project_id)
+        # connection_details = json.loads(sm.access_secret(secret_id))
 
-        sm = SecretManager(project_id)
-
-        connection_details = json.loads(sm.access_secret(secret_id))
+        connection_details = {
+                            "user": "hr",
+                            "password": "hr",
+                            "host": "34.173.67.71",
+                            "port": "1521",
+                            "db": "XEPDB1"
+                            }
 
         logger.info(f"Connecting to : {connection_details['host']}")
         return connection_details
@@ -216,7 +222,6 @@ class OracleDatabaseConnection(Connectors):
                 updated_query = query
 
                 for column in group_by_columns:
-                    print(row[column], type(row[column]))
 
                     if "column_type" in group_by_columns[column] and group_by_columns[column]["column_type"] \
                             == "timestamp":
@@ -242,6 +247,7 @@ class OracleDatabaseConnection(Connectors):
                 logger.info(f"Running query : {updated_query}")
                 result = self.execute_query(updated_query)
                 logger.info(f"Fetched {len(result)} records ")
+                # self.update_last_successful_extract(result, row)
                 yield result
 
         else:

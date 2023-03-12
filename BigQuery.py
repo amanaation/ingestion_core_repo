@@ -59,7 +59,7 @@ class BigQuery(Connectors):
         self.client = bq.Client()
         self.last_successful_values = {}
         self.source_schema = {}
-        self.dest_schema = []
+        self.dest_schema = {"COLUMN_NAME": [], "DATA_TYPE":[]}
 
     def get_table_id(self, dataset_name, destination_table_name):
         self.table_id = f"{self.project_id}.{dataset_name}.{destination_table_name}"
@@ -118,18 +118,24 @@ class BigQuery(Connectors):
                     target_data_type = "STRING"
 
                 field = bq.SchemaField(column_name, target_data_type)
-                self.dest_schema.append(field)
+                self.dest_schema["COLUMN_NAME"].append(column_name)
+                self.dest_schema["DATA_TYPE"].append(target_data_type)
 
                 create_columns_clause += f" {column_name}  {target_data_type} ,"
 
             if "connections " not in create_columns_clause:
-                self.dest_schema.append(bq.SchemaField("connections", "string"))
+                self.dest_schema["COLUMN_NAME"].append("connections")
+                self.dest_schema["DATA_TYPE"].append("string")
                 create_columns_clause += """ connections string  ,"""
+
             elif "created_at " not in create_columns_clause:
-                self.dest_schema.append(bq.SchemaField("created_at", "timetstamp"))
+                self.dest_schema["COLUMN_NAME"].append("created_at")
+                self.dest_schema["DATA_TYPE"].append("timestamp")
                 create_columns_clause += """ created_at timestamp default current_timestamp ,"""
+
             elif "updated_at " not in create_columns_clause:
-                self.dest_schema.append(bq.SchemaField("updated_at", "timetstamp"))
+                self.dest_schema["COLUMN_NAME"].append("updated_at")
+                self.dest_schema["DATA_TYPE"].append("timestamp")
                 create_columns_clause += """ updated_at timestamp default current_timestamp ,"""
 
             create_query = f"Create table {self.table_id} ( {create_columns_clause[:-1]}  )"
@@ -171,7 +177,7 @@ class BigQuery(Connectors):
         _on_clause = ""
         for column in merge_columns:
             _on_clause += f" _target.{column} = _source.{column} and"
-
+        
         _on_clause = _on_clause[:-3]
         return _on_clause
 
@@ -193,18 +199,20 @@ class BigQuery(Connectors):
 
     def delete_temp_table(self, table_name):
         logger.info(f"Deleting temp table : {table_name}")
-        _delete_query = f"drop table  {table_name}"
-        # self.execute(_delete_query, self.project_id)
+        _delete_query = f"drop table if exists {table_name}"
+        self.execute(_delete_query, self.project_id)
         logger.info(f"Successfully deleted temp table : {table_name}")
 
-    def upsert_data(self, source_table_id, target_table_id, source_schema_df):
+    def upsert_data(self, source_table_id, target_table_id):
         logger.info("Merging temp table into destination table")
+        print("destination table schema : ")
+        print(self.dest_schema)
         merge_columns = self.table_config_details['primary_columns']
-        schema_columns = source_schema_df['COLUMN_NAME']
+        schema_columns = self.dest_schema['COLUMN_NAME']
 
         if 'incremental_columns' in self.table_config_details:
             merge_columns += list(self.table_config_details['incremental_columns'].keys())
-
+        
         _on_clause = self.get_on_clause(merge_columns)
         _update_clause = self.get_update_upsert_clause(schema_columns)
         _insert_clause = self.get_upsert_insert_clause(schema_columns)
