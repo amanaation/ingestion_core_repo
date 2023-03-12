@@ -60,6 +60,8 @@ class BigQuery(Connectors):
         self.last_successful_values = {}
         self.source_schema = {}
         self.dest_schema = {"COLUMN_NAME": [], "DATA_TYPE":[]}
+        self.nan_value_mapping = {int: -9223372036854775808, str: 'nan'}
+
 
     def get_table_id(self, dataset_name, destination_table_name):
         self.table_id = f"{self.project_id}.{dataset_name}.{destination_table_name}"
@@ -241,6 +243,33 @@ class BigQuery(Connectors):
             print("delete query : ", _delete_query)
             self.execute(_delete_query, self.project_id)
 
+    def update_integer_null_values(self):
+        dest_schema = pd.DataFrame(self.dest_schema)
+        integer_columns = dest_schema[dest_schema["DATA_TYPE"] == "INT64"]["COLUMN_NAME"]
+        null_value_placeholer = self.nan_value_mapping[int]
+        for column in integer_columns:
+            update_clause = f"update {self.table_id}  set {column} = null where {column} = {null_value_placeholer}"
+            self.client.query(update_clause)
+            print(update_clause)
+            logger.info(f"Updated null values of column {column}")
+
+    def update_string_null_values(self):
+        dest_schema = pd.DataFrame(self.dest_schema)
+        string_columns = dest_schema[dest_schema["DATA_TYPE"] == "STRING"]["COLUMN_NAME"]
+        null_value_placeholer = self.nan_value_mapping[str]
+        for column in string_columns:
+            update_clause = f"update {self.table_id}  set {column} = null where {column} = '{null_value_placeholer}'"
+            self.client.query(update_clause)
+            # self.execute(update_clause, self.table_id)
+            print(update_clause)
+            logger.info(f"Updated null values of column {column}")
+
+    def update_to_null_values(self):
+        logger.info("Updating null values of columns")
+        self.update_integer_null_values()
+        self.update_string_null_values()        
+
+
     def save(self, df: pd.DataFrame, write_mode='append', dataframe_is_table_data=False) -> None:
         """
             This function writes the dataframe to bigquery
@@ -270,4 +299,5 @@ class BigQuery(Connectors):
         job = self.client.load_table_from_dataframe(
             df, self.table_id, job_config=job_config
         )
+        self.update_to_null_values()
         # job.result()

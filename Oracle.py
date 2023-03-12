@@ -48,9 +48,17 @@ class OracleDatabaseConnection(Connectors):
         logger.info("Connection created successfully with source")
 
     def get_connection_details(self, secret_id):
-        project_id = os.getenv("SECRET_PROJECT_ID")
-        sm = SecretManager(project_id)
-        connection_details = json.loads(sm.access_secret(secret_id))
+        # project_id = os.getenv("SECRET_PROJECT_ID")
+        # sm = SecretManager(project_id)
+        # connection_details = json.loads(sm.access_secret(secret_id))
+
+        connection_details = {
+                    "user": "hr",
+                    "password": "hr",
+                    "host": "34.173.67.71",
+                    "port": "1521",
+                    "db": "XEPDB1"
+                    }
 
         logger.info(f"Connecting to : {connection_details['host']}")
         return connection_details
@@ -106,15 +114,19 @@ class OracleDatabaseConnection(Connectors):
             incremental_column_name = incremental_column_name.lower()
             incremental_column = incremental_columns[incremental_column_name]
             if incremental_column_name in last_successful_extract:
+                value = last_successful_extract[incremental_column_name]
 
-                if "column_type" in incremental_column and incremental_column["column_type"] == "timestamp":
+                if pd.isnull(value) or value is None or value is np.nan:
+                    incremental_clause += f""" {incremental_column_name} is null """
+
+                elif "column_type" in incremental_column and incremental_column["column_type"] == "timestamp":
                     incremental_clause += f"""  {incremental_column_name} >= 
-                                        TO_DATE('{last_successful_extract[incremental_column_name]}', 
+                                        TO_DATE('{value}', 
                                         '{incremental_column["column_format"]}') """
                 elif incremental_column["column_type"] == "int":
-                    incremental_clause += f""" {incremental_column_name} >= {last_successful_extract[incremental_column_name]}"""
+                    incremental_clause += f""" {incremental_column_name} >= {value}"""
                 elif incremental_column["column_type"] == "str":
-                    incremental_clause += f""" {incremental_column_name} >= '{last_successful_extract[incremental_column_name]}'"""
+                    incremental_clause += f""" {incremental_column_name} >= '{value}'"""
 
                 incremental_clause += " and "
 
@@ -185,6 +197,9 @@ class OracleDatabaseConnection(Connectors):
         result.columns = [column.lower() for column in result.columns]
         logger.info(f"Created {len(result)} batches")
 
+        result = result[result["tdate"].isnull()]
+        print(result)
+
         return result
 
     def execute_batches(self,
@@ -215,7 +230,11 @@ class OracleDatabaseConnection(Connectors):
 
                 for column in group_by_columns:
 
-                    if "column_type" in group_by_columns[column] and group_by_columns[column]["column_type"] \
+                    if pd.isnull(row[column]) or row[column] is None or row[column] is None \
+                    or row[column] is np.nan:
+                        updated_query += f"  and {column} is null  "
+
+                    elif "column_type" in group_by_columns[column] and group_by_columns[column]["column_type"] \
                             == "timestamp":
 
                         if row[column] is not None:
@@ -228,13 +247,8 @@ class OracleDatabaseConnection(Connectors):
                     else:
                         if type(row[column]) is str:
                             updated_query += f"  and {column} = '{row[column]}'  "
-                        elif type(row[column]) is None or row[column] is None or row[column] is np.nan:
-                            updated_query += f"  and {column} is null  "
-
                         else:
                             updated_query += f"  and {column} = {row[column]}  "
-
-                            print(type(row[column]), row[column], "Inside else")
 
                 logger.info(f"Running query : {updated_query}")
                 result = self.execute_query(updated_query)
@@ -258,18 +272,21 @@ class OracleDatabaseConnection(Connectors):
         for incremental_column in list_incremental_columns:
             if incremental_column in df_columns:
                 incremental_column_last_batch_fetched_value = result_df[incremental_column.upper()].max()
-                if incremental_column in self.last_successful_extract:
-                    if "column_type" in incremental_columns[incremental_column] and \
-                            incremental_columns[incremental_column]["column_type"] == "timestamp" \
-                            and type(self.last_successful_extract[incremental_column]) is str:
-                        self.last_successful_extract[incremental_column] = ciso8601.parse_datetime(
-                            self.last_successful_extract[incremental_column])
+                if self.last_successful_extract and incremental_column in self.last_successful_extract:
+                    print(incremental_column_last_batch_fetched_value, self.last_successful_extract[incremental_column])
 
-                    self.last_successful_extract[incremental_column] = max(
-                        self.last_successful_extract[incremental_column],
-                        incremental_column_last_batch_fetched_value)
-                else:
-                    self.last_successful_extract[incremental_column] = incremental_column_last_batch_fetched_value
+                    if incremental_column_last_batch_fetched_value and self.last_successful_extract[incremental_column]:
+                        if "column_type" in incremental_columns[incremental_column] and \
+                                incremental_columns[incremental_column]["column_type"] == "timestamp" \
+                                and type(self.last_successful_extract[incremental_column]) is str:
+                            self.last_successful_extract[incremental_column] = ciso8601.parse_datetime(
+                                self.last_successful_extract[incremental_column])
+
+                        self.last_successful_extract[incremental_column] = max(
+                            self.last_successful_extract[incremental_column],
+                            incremental_column_last_batch_fetched_value)
+                    else:
+                        self.last_successful_extract[incremental_column] = incremental_column_last_batch_fetched_value
         logger.info(f"Updated last successful extract : {self.last_successful_extract}")
 
     def extract(self, last_successful_extract: dict, **table: dict):
